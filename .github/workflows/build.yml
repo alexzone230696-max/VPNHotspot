@@ -1,31 +1,33 @@
-name: Android Universal Build
+name: Android Release Build
 
 on:
-  push:
-    branches:
-      - '**'
-  pull_request:
-    branches:
-      - '**'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release Tag"
+        required: true
+      play:
+        description: "Build Play Bundle (AAB)?"
+        required: false
 
 jobs:
-  build:
+  setup:
+    name: Setup SDK & JDK
     runs-on: ubuntu-latest
-
+    outputs:
+      sdk-path: ${{ steps.set-env.outputs.sdk }}
     steps:
-      # 1. Клонируем репозиторий
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2. Устанавливаем JDK 17
       - name: Set up JDK
         uses: actions/setup-java@v3
         with:
           distribution: temurin
           java-version: 17
 
-      # 3. Устанавливаем Android SDK и инструменты
       - name: Install Android SDK & Tools
+        id: set-env
         run: |
           sudo apt-get update
           sudo apt-get install -y wget unzip tar lib32stdc++6 lib32z1
@@ -36,8 +38,20 @@ jobs:
           echo "$HOME/Android/cmdline-tools/tools/bin" >> $GITHUB_PATH
           yes | sdkmanager --licenses
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;25.2.9519653"
+          echo "SDK=$HOME/Android" >> $GITHUB_OUTPUT
 
-      # 4. Кэш Gradle
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew  # для React Native или Native
+        # для подпапки android используйте ./android/gradlew
+
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
       - name: Cache Gradle
         uses: actions/cache@v3
         with:
@@ -47,31 +61,45 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      # 5. Делаем gradlew исполняемым
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
-
-      # 6. Сборка debug APK (для теста)
       - name: Build Debug APK
         run: ./gradlew assembleDebug
 
-      # 7. Сборка release APK (подписанный через GitHub Secrets)
       - name: Build Release APK
         if: ${{ secrets.KEYSTORE && secrets.KEYSTORE_PASSWORD && secrets.KEY_ALIAS && secrets.KEY_PASSWORD }}
         run: |
           echo "${{ secrets.KEYSTORE }}" | base64 --decode > my-release-key.jks
-          ./gradlew assembleRelease -Pandroid.injected.signing.store.file=$PWD/my-release-key.jks \
-                                    -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
-                                    -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
-                                    -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=$PWD/my-release-key.jks \
+            -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
+            -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
+            -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
 
-      # 8. Поиск APK
       - name: Find APK
         run: find . -type f -name "*.apk"
 
-      # 9. Сохраняем APK как артефакт
-      - name: Upload APK
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
           path: '**/build/outputs/**/*.apk'
+
+  play:
+    name: Build Play Bundle (AAB)
+    if: ${{ github.event.inputs.play == 'y' }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Build Play Bundle
+        run: ./gradlew bundleRelease  # или bundlePlayRelease для Play
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-aab
+          path: '**/build/outputs/bundle/**/*.aab'
