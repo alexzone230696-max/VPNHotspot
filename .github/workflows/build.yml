@@ -1,4 +1,4 @@
-name: Android Build APK
+name: Android Universal Build
 
 on:
   push:
@@ -28,12 +28,12 @@ jobs:
       - name: Install Android SDK & Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y unzip wget tar lib32stdc++6 lib32z1
+          sudo apt-get install -y wget unzip tar lib32stdc++6 lib32z1
           wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
           mkdir -p $HOME/Android/cmdline-tools
           unzip cmdline-tools.zip -d $HOME/Android/cmdline-tools
-          export ANDROID_SDK_ROOT=$HOME/Android
-          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/tools/bin
+          echo "ANDROID_SDK_ROOT=$HOME/Android" >> $GITHUB_ENV
+          echo "$HOME/Android/cmdline-tools/tools/bin" >> $GITHUB_PATH
           yes | sdkmanager --licenses
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;25.2.9519653"
 
@@ -47,15 +47,29 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      # 5. Сборка APK
-      - name: Build APK
-        run: ./gradlew assembleRelease
+      # 5. Делаем gradlew исполняемым
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
 
-      # 6. Поиск APK
+      # 6. Сборка debug APK (для теста)
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      # 7. Сборка release APK (подписанный через GitHub Secrets)
+      - name: Build Release APK
+        if: ${{ secrets.KEYSTORE && secrets.KEYSTORE_PASSWORD && secrets.KEY_ALIAS && secrets.KEY_PASSWORD }}
+        run: |
+          echo "${{ secrets.KEYSTORE }}" | base64 --decode > my-release-key.jks
+          ./gradlew assembleRelease -Pandroid.injected.signing.store.file=$PWD/my-release-key.jks \
+                                    -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
+                                    -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
+                                    -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
+
+      # 8. Поиск APK
       - name: Find APK
         run: find . -type f -name "*.apk"
 
-      # 7. Сохраняем APK как артефакт
+      # 9. Сохраняем APK как артефакт
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
