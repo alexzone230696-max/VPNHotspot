@@ -4,7 +4,7 @@ name: Android Build APK
 on:
   push:
     branches:
-      - '**'   # любая ветка
+      - '**'   # любя ветка
   pull_request:
     branches:
       - '**'
